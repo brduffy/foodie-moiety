@@ -1,0 +1,16 @@
+# Build requirements for production installer.
+# Installs Essentials + Addons (needed for QtMultimedia — video/audio).
+# PyInstaller's excludes list in the .spec keeps the bundle lean by dropping
+# WebEngine/Chromium, 3D, QML, Charts, Designer, etc.
+
+PySide6-Essentials==6.10.1
+PySide6-Addons==6.10.1
+shiboken6==6.10.1
+faster-whisper>=1.0.0
+tokenizers>=0.15.0
+huggingface-hub>=0.16.4
+ctranslate2>=4.0.0
+numpy>=1.24.0
+openwakeword>=0.6.0
+pycognito>=2024.5.1
+pyobjc-framework-Cocoa>=10.0

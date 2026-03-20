@@ -1,0 +1,8 @@
+{
+  "cognito_region": "us-east-1",
+  "cognito_user_pool_id": "YOUR_USER_POOL_ID",
+  "cognito_client_id": "YOUR_CLIENT_ID",
+  "api_base_url": "https://YOUR_API_GATEWAY_URL",
+  "website_url": "https://YOUR_WEBSITE_URL",
+  "api_key": "YOUR_API_KEY"
+}

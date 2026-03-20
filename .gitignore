@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Database (large/production databases)
+# *.db
+# *.sqlite
+# *.sqlite3
+# Note: foodie_moiety.db is tracked for cross-platform dev sync
+
+# Media Files (large video files)
+*.mkv
+*.mp4
+*.avi
+*.mov
+
+# LLM model files (too large for git)
+models/llm/
+*.gguf
+
+# Whisper model files (too large for git)
+models/whisper/
+
+# Piper TTS model files are committed (61MB, under GitHub's 100MB limit)
+# so both Windows and Mac get them via git pull.
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# PyCharm
+.idea/
+
+# Certificates and credentials
+*.cer
+*.p12
+*.mobileprovision
+config.json
+
+# Build virtualenv
+.build_venv/
+
+# macOS
+.AppleDouble
+.LSOverride
