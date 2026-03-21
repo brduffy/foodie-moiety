@@ -2,9 +2,12 @@
 
 import platform
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, QSizeF, Qt, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
+    QGraphicsScene,
+    QGraphicsView,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -16,7 +19,7 @@ from PySide6.QtWidgets import (
 from models.recipe_data import SpeedRange
 from utils.database import delete_speed_range, load_speed_ranges, save_speed_range
 from utils.helpers import create_white_icon, platform_icon
-from widgets.custom_widgets import ClickableSlider, DoubleClickVideoWidget, SpeedRangeSlider
+from widgets.custom_widgets import ClickableSlider, SpeedRangeSlider
 
 
 class CustomTooltip(QWidget):
@@ -83,17 +86,30 @@ class VideoPlayer(QWidget):
         self.audio_output.setVolume(0.7)
         self.media_player.setAudioOutput(self.audio_output)
 
-        self.video_widget = DoubleClickVideoWidget(self)
-        self.video_widget.setAspectRatioMode(Qt.KeepAspectRatio)
-        self.media_player.setVideoOutput(self.video_widget)
+        # QGraphicsVideoItem renders video inside a QGraphicsScene,
+        # allowing controls to be overlaid as proxy widgets that paint
+        # above the video — unlike QVideoWidget's native surface.
+        self._scene = QGraphicsScene(self)
+        self._view = QGraphicsView(self._scene)
+        self._view.setFrameStyle(0)
+        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._view.setStyleSheet("background-color: black;")
+        self._view.setMouseTracking(True)
+        self._view.viewport().setMouseTracking(True)
+        self._view.installEventFilter(self)
+        self._view.viewport().installEventFilter(self)
 
-        # Main UI layout — video fills entire widget, controls overlay the bottom
+        self.video_item = QGraphicsVideoItem()
+        self._scene.addItem(self.video_item)
+        self.media_player.setVideoOutput(self.video_item)
+
+        # Main UI layout
         self.setStyleSheet("background-color: black;")
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-        self.main_layout.addWidget(self.video_widget)
-        self.video_widget.lower()  # Ensure video is behind controls
+        self.main_layout.addWidget(self._view)
 
         # Create controls
         self._setup_controls()
@@ -105,6 +121,7 @@ class VideoPlayer(QWidget):
         self.media_player.playbackStateChanged.connect(self._update_marker_btn_state)
         self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
         self.media_player.tracksChanged.connect(self.sync_ratio_to_video)
+        self.media_player.tracksChanged.connect(self._fit_video)
 
         # Load video (video_path is None on fresh install — videos loaded per-recipe)
         if video_path:
@@ -133,7 +150,7 @@ class VideoPlayer(QWidget):
         # Inner container with rounded bottom corners (macOS window chrome)
         controls_inner = QWidget()
         controls_inner.setObjectName("ControlsInner")
-        _corner_radius = "10px" if platform.system() == "Darwin" else "0px"
+        _corner_radius = "10px"
         controls_inner.setStyleSheet(
             f"QWidget#ControlsInner {{"
             f"  background-color: #121212;"
@@ -273,25 +290,15 @@ class VideoPlayer(QWidget):
         controls_layout.addWidget(self.vol_button)
         controls_layout.addWidget(self.vol_slider)
         controls_layout.addWidget(self.time_label)
-        # Controls are a frameless tool window so they render above
-        # QVideoWidget's native macOS surface.  Positioned in
-        # _position_controls().
-        self.controls_widget.setParent(
-            self, Qt.Tool | Qt.FramelessWindowHint)
-        self.controls_widget.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        # Add controls as a proxy widget in the scene — always paints
+        # above the video item, moves with the window, no z-order issues.
+        self._controls_proxy = self._scene.addWidget(self.controls_widget)
 
         # Auto-hide controls after 3 seconds of no mouse activity
         self._controls_hide_timer = QTimer(self)
         self._controls_hide_timer.setSingleShot(True)
         self._controls_hide_timer.setInterval(3000)
         self._controls_hide_timer.timeout.connect(self._hide_controls)
-        # Poll mouse position to detect activity — QVideoWidget's native
-        # macOS surface swallows all mouse events and sits above all sibling
-        # widgets including tool windows, so event-based approaches fail.
-        self._last_mouse_pos = None
-        self._mouse_poll_timer = QTimer(self)
-        self._mouse_poll_timer.setInterval(200)
-        self._mouse_poll_timer.timeout.connect(self._poll_mouse)
 
     def sync_ratio_to_video(self):
         """Standardizes height to match video aspect ratio."""
@@ -328,9 +335,9 @@ class VideoPlayer(QWidget):
             QTimer.singleShot(500, self.end_transition)
 
     def end_transition(self):
-        """Mark transition as complete and reposition controls."""
+        """Mark transition as complete."""
         self.is_transitioning = False
-        self._position_controls()
+        self._fit_video()
 
     def toggle_full_screen(self):
         """Toggle between fullscreen and normal window mode."""
@@ -341,65 +348,53 @@ class VideoPlayer(QWidget):
             main_window.showFullScreen()
 
     def resizeEvent(self, event):
-        """Reposition the control bar overlay on resize."""
+        """Fit video and reposition controls on resize."""
         super().resizeEvent(event)
-        self._position_controls()
+        self._fit_video()
 
-    def _position_controls(self):
-        """Position the controls tool window at the bottom of the main window."""
-        if not self.isVisible():
-            return
-        main_window = self.window()
-        # Align controls to the main window's bottom edge so they don't
-        # extend beyond it.  Use frameGeometry vs geometry to find the
-        # content area bottom in global coordinates.
-        content_bottom = main_window.geometry().bottom() + 1
-        content_left = main_window.geometry().left()
-        content_width = main_window.geometry().width()
-        self.controls_widget.setGeometry(
-            content_left, content_bottom - self.control_height,
-            content_width, self.control_height,
-        )
+    def _fit_video(self):
+        """Scale video item to fill the view and position controls."""
+        view_size = self._view.viewport().size()
+        self.video_item.setSize(QSizeF(view_size.width(), view_size.height()))
+        self._scene.setSceneRect(0, 0, view_size.width(), view_size.height())
+        self.controls_widget.setFixedWidth(view_size.width())
+        self._controls_proxy.setPos(
+            0, view_size.height() - self.control_height)
+
+    def _on_view_event(self, event):
+        """Handle mouse events on the graphics view."""
+        etype = event.type()
+        if etype == QEvent.MouseButtonDblClick:
+            self.toggle_full_screen()
+            return True
+        elif etype == QEvent.MouseMove:
+            if not self._controls_visible:
+                self._show_controls()
+            else:
+                self._controls_hide_timer.start()
+        return False
 
     def showEvent(self, event):
-        """Show controls and start mouse polling when video view appears."""
+        """Show controls when video view appears."""
         super().showEvent(event)
-        self._last_mouse_pos = None
-        self._mouse_poll_timer.start()
+        self._fit_video()
         self._show_controls()
 
     def hideEvent(self, event):
-        """Hide controls and stop polling when video view is hidden."""
+        """Stop timers when video view is hidden."""
         super().hideEvent(event)
-        self.controls_widget.hide()
-        self._mouse_poll_timer.stop()
         self._controls_hide_timer.stop()
 
     def _show_controls(self):
         """Show the control bar and restart the auto-hide timer."""
         self._controls_visible = True
-        self._position_controls()
-        self.controls_widget.show()
+        self._controls_proxy.show()
         self._controls_hide_timer.start()
 
     def _hide_controls(self):
         """Hide the control bar (auto-hide after inactivity)."""
         self._controls_visible = False
-        self.controls_widget.hide()
-
-    def _poll_mouse(self):
-        """Check if the mouse has moved over the video player."""
-        from PySide6.QtGui import QCursor
-        pos = QCursor.pos()
-        if self._last_mouse_pos is not None and pos != self._last_mouse_pos:
-            # Mouse moved — check if it's within our window area
-            local = self.mapFromGlobal(pos)
-            if self.rect().contains(local):
-                if not self._controls_visible:
-                    self._show_controls()
-                else:
-                    self._controls_hide_timer.start()
-        self._last_mouse_pos = pos
+        self._controls_proxy.hide()
 
     def toggle_skip_amount(self):
         """Cycle skip amount through 1s, 5s, 10s."""
@@ -455,8 +450,11 @@ class VideoPlayer(QWidget):
         button.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        """Show shared tooltip above any registered button on hover."""
-        if obj in self._tooltip_map:
+        """Handle graphics view mouse events and button tooltips."""
+        if obj is self._view or obj is self._view.viewport():
+            if self._on_view_event(event):
+                return True
+        elif hasattr(self, "_tooltip_map") and obj in self._tooltip_map:
             if event.type() == QEvent.Enter:
                 self._btn_tooltip.findChild(QLabel).setText(self._tooltip_map[obj])
                 self._btn_tooltip.adjustSize()
