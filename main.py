@@ -8566,9 +8566,6 @@ class MainWindow(QMainWindow):
                 self._autohide_timer.start(self._autohide_timeout_ms)
 
         if not self.isFullScreen() and not self.is_resizing:
-            # Let the video player manage its own aspect ratio (includes control bar)
-            if self.stacked_widget.currentWidget() is self.video_player:
-                return
             # Skip geometric maximize detection during fullscreen exit —
             # the animation passes through full-width which would falsely
             # set _is_maximized.  changeEvent handles the state change;
