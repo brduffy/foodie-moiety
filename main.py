@@ -85,7 +85,7 @@ import urllib.parse
 
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 
 
 class FoodieApp(QApplication):

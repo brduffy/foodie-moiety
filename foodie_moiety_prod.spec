@@ -178,8 +178,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Foodie Moiety',
         'CFBundleDisplayName': 'Foodie Moiety',
-        'CFBundleVersion': '1.0.3',
-        'CFBundleShortVersionString': '1.0.3',
+        'CFBundleVersion': '1.0.4',
+        'CFBundleShortVersionString': '1.0.4',
         'NSHighResolutionCapable': True,
         'NSMicrophoneUsageDescription': 'Foodie Moiety uses the microphone for voice commands.',
         # Register foodiemoiety:// URL scheme so macOS routes deep links to this app
