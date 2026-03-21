@@ -371,7 +371,14 @@ class VideoPlayer(QWidget):
             if not self._controls_visible:
                 self._show_controls()
             else:
-                self._controls_hide_timer.start()
+                # Don't restart hide timer if mouse is over the controls
+                pos = event.position() if hasattr(event, 'position') else event.pos()
+                view_pos = self._view.mapToScene(pos.toPoint())
+                ctrl_rect = self._controls_proxy.sceneBoundingRect()
+                if not ctrl_rect.contains(view_pos):
+                    self._controls_hide_timer.start()
+                else:
+                    self._controls_hide_timer.stop()
         return False
 
     def showEvent(self, event):
