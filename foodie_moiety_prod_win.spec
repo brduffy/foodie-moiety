@@ -1,17 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for Foodie Moiety Cross — macOS production build.
+PyInstaller spec for Foodie Moiety Cross — Windows production build.
 
 Includes voice/ML models (Vosk, wake word) and references the clean
-production database. Code signing identity and entitlements are configured
-for hardened runtime (required for notarization).
+production database. No BUNDLE() (macOS-only), no PyObjC.
 
 Prerequisites:
     python create_prod_db.py          # Generate dist/foodie_moiety_prod.db
     pip install -r requirements-build.txt pyinstaller
 
 Usage:
-    pyinstaller foodie_moiety_prod.spec --clean --noconfirm
+    pyinstaller foodie_moiety_prod_win.spec --clean --noconfirm
 """
 
 import os
@@ -19,9 +18,6 @@ import sys
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 block_cipher = None
-
-# Code signing — set via environment variable or pass None to skip
-codesign_id = os.environ.get('CODESIGN_IDENTITY', None) or None
 
 # Collect full packages that PyInstaller misses via hiddenimports alone
 _extra_datas = []
@@ -38,14 +34,12 @@ for pkg in ('vosk', 'openwakeword', 'tqdm', 'yaml'):
 # in models/wakeword/openwakeword_resources/ and bundle them where the library expects.
 _extra_datas.append(('models/wakeword/openwakeword_resources', 'openwakeword/resources/models'))
 
-
 a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=_extra_binaries,
     datas=_extra_datas + [
         # Clean production database (schema + default tags, no recipes)
-        # build_release_mac.sh copies foodie_moiety_prod.db → foodie_moiety.db
         ('dist/foodie_moiety.db', '.'),
         ('config.json', '.'),
         # Reporting procedure for review mode
@@ -71,12 +65,6 @@ a = Analysis(
         'vosk',
         'openwakeword',
         'onnxruntime',
-        # PyObjC — imported conditionally (platform check) so PyInstaller misses them
-        'objc',
-        'AppKit',
-        'Foundation',
-        # Conditional import behind platform.system() == "Darwin"
-        'services.audio_engine_mac',
     ],
     hookspath=[],
     hooksconfig={},
@@ -121,6 +109,12 @@ a = Analysis(
         'tokenizers',
         'tflite_runtime',
         'tensorflow',
+
+        # ── macOS-only ──
+        'objc',
+        'AppKit',
+        'Foundation',
+        'services.audio_engine_mac',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -144,8 +138,9 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,  # We handle argv ourselves (deep link URL)
     target_arch=None,
-    codesign_identity=codesign_id,
-    entitlements_file='entitlements.plist' if codesign_id else None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='media/app_icon.ico',
 )
 
 coll = COLLECT(
@@ -157,26 +152,4 @@ coll = COLLECT(
     upx=False,
     upx_exclude=[],
     name='FoodieMoiety',
-)
-
-app = BUNDLE(
-    coll,
-    name='FoodieMoiety.app',
-    icon='media/app_icon.icns',
-    bundle_identifier='com.foodiemoiety.cross',
-    info_plist={
-        'CFBundleName': 'Foodie Moiety',
-        'CFBundleDisplayName': 'Foodie Moiety',
-        'CFBundleVersion': '1.0.4',
-        'CFBundleShortVersionString': '1.0.4',
-        'NSHighResolutionCapable': True,
-        'NSMicrophoneUsageDescription': 'Foodie Moiety uses the microphone for voice commands.',
-        # Register foodiemoiety:// URL scheme so macOS routes deep links to this app
-        'CFBundleURLTypes': [
-            {
-                'CFBundleURLName': 'com.foodiemoiety.cross',
-                'CFBundleURLSchemes': ['foodiemoiety'],
-            },
-        ],
-    },
 )
