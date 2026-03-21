@@ -80,16 +80,30 @@ except Exception as _e:
     WAKEWORD_AVAILABLE = False
     log.warning("openwakeword unavailable: %s", _e)
 
-from utils.paths import WHISPER_MODEL as _WHISPER_MODEL_PATH, WAKEWORD_MODEL as _WAKEWORD_MODEL_PATH
+from utils.paths import (
+    WHISPER_MODEL as _WHISPER_MODEL_PATH,
+    WAKEWORD_MODEL as _WAKEWORD_MODEL_PATH,
+    VOSK_MODEL as _VOSK_MODEL_PATH,
+)
 
 # Whisper model — "small.en" gives much better accuracy for food names
 # (bruschetta, guanciale, etc.) and fewer hallucinations vs "base".
 # ~2 GB RAM, ~4x realtime on CPU. Bundled in project models/ directory.
 WHISPER_MODEL_PATH = str(_WHISPER_MODEL_PATH)
 WAKEWORD_MODEL = _WAKEWORD_MODEL_PATH
+VOSK_MODEL_PATH = str(_VOSK_MODEL_PATH)
 
-log.info("Voice capabilities: audio=%s, stt=%s, wakeword=%s",
-         AUDIO_AVAILABLE, STT_AVAILABLE, WAKEWORD_AVAILABLE)
+# Vosk speech recognition (grammar-based, streaming, lightweight)
+try:
+    from vosk import Model as VoskModel, KaldiRecognizer, SetLogLevel
+    SetLogLevel(-1)  # Suppress Vosk's verbose Kaldi logging
+    VOSK_AVAILABLE = True
+except ImportError:
+    VOSK_AVAILABLE = False
+    log.warning("vosk unavailable")
+
+log.info("Voice capabilities: audio=%s, stt=%s, vosk=%s, wakeword=%s",
+         AUDIO_AVAILABLE, STT_AVAILABLE, VOSK_AVAILABLE, WAKEWORD_AVAILABLE)
 
 
 def _ensure_whisper_imported():
@@ -214,6 +228,11 @@ class VoiceService(QObject):
         self._model_loaded = False
         self._wakeword_loaded = False
 
+        # Vosk recognizer (streaming, grammar-constrained)
+        self._vosk_model = None
+        self._vosk_recognizer = None
+        self._use_vosk = self._should_use_vosk()
+
         # Recording state
         self._is_recording = False
         self._is_listening = False
@@ -287,8 +306,20 @@ class VoiceService(QObject):
         self._transcribe_requested.connect(self._transcribe_audio)
         self._request_restart.connect(self.restart_stream)
 
+    @staticmethod
+    def _should_use_vosk() -> bool:
+        """Check settings for recognizer preference.  Default to Vosk."""
+        if not VOSK_AVAILABLE:
+            return False
+        from PySide6.QtCore import QSettings
+        from utils.paths import SETTINGS_PATH
+        settings = QSettings(str(SETTINGS_PATH), QSettings.IniFormat)
+        return settings.value("Voice/recognizer", "vosk") == "vosk"
+
     def is_available(self) -> bool:
         """Check if voice functionality is available."""
+        if self._use_vosk:
+            return AUDIO_AVAILABLE and VOSK_AVAILABLE
         return AUDIO_AVAILABLE and STT_AVAILABLE
 
     def is_wakeword_available(self) -> bool:
@@ -309,6 +340,17 @@ class VoiceService(QObject):
         if not self.is_available():
             return
         if self._model_loaded:
+            return
+
+        # Vosk model loads fast (~100ms) — do it synchronously.
+        if self._use_vosk:
+            try:
+                self._load_vosk_model()
+                self._model_loaded = True
+                log.info("Vosk model loaded OK")
+            except Exception as e:
+                log.error("Failed to load Vosk model: %s", e, exc_info=True)
+                self.error.emit(f"Failed to load Vosk model: {e}")
             return
 
         if self._preload_thread is not None and self._preload_thread.isRunning():
@@ -337,6 +379,13 @@ class VoiceService(QObject):
             self._preload_thread.deleteLater()
             self._preload_thread = None
 
+    def _load_vosk_model(self) -> None:
+        """Load Vosk model and create the KaldiRecognizer."""
+        from services.vosk_grammars import VIEW_GRAMMARS, RECIPE_DETAIL_GRAMMAR
+        log.info("Loading Vosk model from %s", VOSK_MODEL_PATH)
+        self._vosk_model = VoskModel(VOSK_MODEL_PATH)
+        grammar = VIEW_GRAMMARS.get(self._active_view, RECIPE_DETAIL_GRAMMAR)
+        self._vosk_recognizer = KaldiRecognizer(self._vosk_model, self.SAMPLE_RATE, grammar)
 
     # -------------------------------------------------------------------------
     # Always-on listening mode (wake word + auto-stop)
@@ -729,7 +778,10 @@ class VoiceService(QObject):
                 return
 
             if self._is_recording:
-                self._process_recording_chunk(audio_chunk)
+                if self._use_vosk:
+                    self._process_vosk_chunk(audio_chunk)
+                else:
+                    self._process_recording_chunk(audio_chunk)
             elif self._hands_free:
                 self._check_speech_onset(audio_chunk)
             else:
@@ -788,10 +840,17 @@ class VoiceService(QObject):
                          rms, self._onset_streak)
                 self._onset_streak = 0
                 self._start_command_recording()
-                # Include both triggering chunks so short commands like
-                # "more" don't lose their first 80-160ms.
-                self._audio_chunks.append(self._onset_first_chunk)
-                self._audio_chunks.append(audio_chunk.copy())
+                if self._use_vosk and self._vosk_recognizer is not None:
+                    # Feed onset chunks to Vosk so short commands aren't lost
+                    self._vosk_recognizer.AcceptWaveform(
+                        self._onset_first_chunk.flatten().tobytes())
+                    self._vosk_recognizer.AcceptWaveform(
+                        audio_chunk.flatten().tobytes())
+                else:
+                    # Include both triggering chunks so short commands like
+                    # "more" don't lose their first 80-160ms.
+                    self._audio_chunks.append(self._onset_first_chunk)
+                    self._audio_chunks.append(audio_chunk.copy())
                 # Skip Phase 1 — onset already confirmed sustained audio.
                 # Phase 2 silence detection handles the rest.  False triggers
                 # hit immediate silence → stop in ~1.4s (vs 3s grace period)
@@ -807,8 +866,14 @@ class VoiceService(QObject):
         self.hands_free_changed.emit(enabled)
 
     def set_active_view(self, view: str) -> None:
-        """Set the current UI view for context-aware whisper prompts."""
+        """Set the current UI view for context-aware recognition."""
         self._active_view = view
+        if self._use_vosk and self._vosk_model is not None:
+            from services.vosk_grammars import VIEW_GRAMMARS
+            grammar = VIEW_GRAMMARS.get(view)
+            if grammar:
+                self._vosk_recognizer = KaldiRecognizer(
+                    self._vosk_model, self.SAMPLE_RATE, grammar)
 
     # View-specific whisper config — biases transcription toward commands.
     # initial_prompt: soft bias via decoder conditioning (vocabulary hint)
@@ -908,8 +973,13 @@ class VoiceService(QObject):
         self._onset_continuation_seen = False  # hands-free: any Phase 2 chunk above noise?
         self._transcription_seq += 1
 
-        log.info("Recording started (seq=%d, view=%s, hands_free=%s)",
-                 self._transcription_seq, self._active_view, self._hands_free)
+        log.info("Recording started (seq=%d, view=%s, hands_free=%s, vosk=%s)",
+                 self._transcription_seq, self._active_view, self._hands_free,
+                 self._use_vosk)
+
+        # Reset Vosk recognizer state for fresh utterance
+        if self._use_vosk and self._vosk_recognizer is not None:
+            self._vosk_recognizer.FinalResult()  # Drains and resets
 
         # Reset wake word model to prevent repeated detections
         if self._wakeword_model is not None:
@@ -940,6 +1010,67 @@ class VoiceService(QObject):
             self._wakeword_model.reset()
 
         self.followup_started.emit()
+
+    def _process_vosk_chunk(self, audio_chunk: np.ndarray) -> None:
+        """Feed audio to Vosk recognizer in streaming mode.
+
+        Vosk handles endpointing internally — AcceptWaveform() returns True
+        when the user stops speaking.  No onset detection, silence tracking,
+        or background transcription thread is needed.
+        """
+        import json
+        import time
+
+        # Load on-demand if preload_model wasn't called
+        if self._vosk_recognizer is None:
+            try:
+                self._load_vosk_model()
+            except Exception as e:
+                log.error("Failed to load Vosk model: %s", e)
+                self._is_recording = False
+                self.error.emit(f"Failed to load Vosk model: {e}")
+                return
+
+        elapsed = time.time() - self._recording_start
+
+        # Follow-up timeout — no speech detected within window
+        if self._is_followup and elapsed >= self.FOLLOWUP_TIMEOUT:
+            self._vosk_recognizer.FinalResult()  # Reset state
+            self._is_recording = False
+            self._is_followup = False
+            self.followup_expired.emit()
+            return
+
+        # Hard cap on recording time
+        if elapsed >= self.MAX_RECORDING_TIME:
+            result = json.loads(self._vosk_recognizer.FinalResult())
+            text = result.get("text", "").strip()
+            self._is_recording = False
+            self._is_followup = False
+            self.recording_stopped.emit()
+            if text and text != "[unk]":
+                log.info("Vosk result (max time, %.2fs): %r", elapsed, text)
+                self.transcription_ready.emit(text)
+            else:
+                self.error.emit("")
+            return
+
+        # Feed raw int16 bytes to Vosk
+        audio_bytes = audio_chunk.flatten().tobytes()
+        if self._vosk_recognizer.AcceptWaveform(audio_bytes):
+            # Utterance complete (Vosk's endpointer detected silence)
+            result = json.loads(self._vosk_recognizer.Result())
+            text = result.get("text", "").strip()
+            self._is_recording = False
+            self._is_followup = False
+            self.recording_stopped.emit()
+
+            if text and text != "[unk]":
+                log.info("Vosk result (%.2fs): %r", elapsed, text)
+                self.transcription_ready.emit(text)
+            else:
+                log.info("Vosk: no valid speech (text=%r, %.2fs)", text, elapsed)
+                self.error.emit("")
 
     def _process_recording_chunk(self, audio_chunk: np.ndarray) -> None:
         """Process audio chunk during command recording."""
@@ -1219,7 +1350,19 @@ class VoiceService(QObject):
         audio_data = np.concatenate(self._audio_chunks, axis=0)
         self._audio_chunks = []
 
-        self._transcribe_audio(audio_data)
+        if self._use_vosk and self._vosk_recognizer is not None:
+            import json
+            audio_bytes = audio_data.flatten().tobytes()
+            self._vosk_recognizer.AcceptWaveform(audio_bytes)
+            result = json.loads(self._vosk_recognizer.FinalResult())
+            text = result.get("text", "").strip()
+            if text and text != "[unk]":
+                log.info("Vosk PTT result: %r", text)
+                self.transcription_ready.emit(text)
+            else:
+                self.error.emit("")
+        else:
+            self._transcribe_audio(audio_data)
 
     # -------------------------------------------------------------------------
     # Transcription

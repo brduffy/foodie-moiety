@@ -48,6 +48,7 @@ DATA_DIR = _app_data_dir()
 # Bundled assets (read-only)
 # ---------------------------------------------------------------------------
 WHISPER_MODEL = BUNDLE_DIR / "models" / "whisper" / "small.en"
+VOSK_MODEL = BUNDLE_DIR / "models" / "vosk" / "small-en-us"
 WAKEWORD_MODEL = BUNDLE_DIR / "models" / "wakeword" / "hey_foodie.onnx"
 PIPER_ONNX = BUNDLE_DIR / "models" / "tts" / "en_US-hfc_female-medium.onnx"
 DEFAULT_IMAGE = BUNDLE_DIR / "media" / "default.jpg"

@@ -64,6 +64,7 @@ a = Analysis(
         ('media/fm_logo.png', 'media'),
         # ── ML models ──
         ('models/whisper/small.en', 'models/whisper/small.en'),
+        ('models/vosk/small-en-us', 'models/vosk/small-en-us'),
         ('models/wakeword/hey_foodie.onnx', 'models/wakeword'),
     ],
     hiddenimports=_extra_hiddenimports + [
