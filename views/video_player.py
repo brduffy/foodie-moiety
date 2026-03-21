@@ -359,7 +359,7 @@ class VideoPlayer(QWidget):
         self._scene.setSceneRect(0, 0, view_size.width(), view_size.height())
         self.controls_widget.setFixedWidth(view_size.width())
         self._controls_proxy.setPos(
-            0, view_size.height() - self.control_height)
+            0, view_size.height() - self.control_height + 2)
 
     def _on_view_event(self, event):
         """Handle mouse events on the graphics view."""
