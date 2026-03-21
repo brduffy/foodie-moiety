@@ -2,7 +2,7 @@
 """
 PyInstaller spec for Foodie Moiety Cross — macOS production build.
 
-Includes voice/ML models (Whisper, wake word) and references the clean
+Includes voice/ML models (Vosk, wake word) and references the clean
 production database. Code signing identity and entitlements are configured
 for hardened runtime (required for notarization).
 
@@ -27,8 +27,7 @@ codesign_id = os.environ.get('CODESIGN_IDENTITY', None) or None
 _extra_datas = []
 _extra_binaries = []
 _extra_hiddenimports = []
-for pkg in ('faster_whisper', 'openwakeword', 'tokenizers',
-            'huggingface_hub', 'ctranslate2', 'tqdm', 'yaml'):
+for pkg in ('openwakeword', 'tqdm', 'yaml'):
     d, b, h = collect_all(pkg)
     _extra_datas += d
     _extra_binaries += b
@@ -39,14 +38,6 @@ for pkg in ('faster_whisper', 'openwakeword', 'tokenizers',
 # in models/wakeword/openwakeword_resources/ and bundle them where the library expects.
 _extra_datas.append(('models/wakeword/openwakeword_resources', 'openwakeword/resources/models'))
 
-# tokenizers uses a Rust-built .abi3.so that collect_all sometimes misses
-import site, glob
-_site = site.getsitepackages()[0] if site.getsitepackages() else ''
-_tok_so = glob.glob(os.path.join(_site, 'tokenizers', 'tokenizers*.so'))
-if not _tok_so:
-    _tok_so = glob.glob(os.path.join(_site, 'tokenizers', 'tokenizers*.pyd'))
-for _p in _tok_so:
-    _extra_binaries.append((_p, 'tokenizers'))
 
 a = Analysis(
     ['main.py'],
@@ -63,7 +54,6 @@ a = Analysis(
         ('media/default.jpg', 'media'),
         ('media/fm_logo.png', 'media'),
         # ── ML models ──
-        ('models/whisper/small.en', 'models/whisper/small.en'),
         ('models/vosk/small-en-us', 'models/vosk/small-en-us'),
         ('models/wakeword/hey_foodie.onnx', 'models/wakeword'),
     ],
@@ -79,11 +69,8 @@ a = Analysis(
         'botocore',
         'pycognito',
         # ML/voice — ensure PyInstaller finds these
-        'faster_whisper',
         'openwakeword',
         'onnxruntime',
-        'ctranslate2',
-        'tokenizers',
         # PyObjC — imported conditionally (platform check) so PyInstaller misses them
         'objc',
         'AppKit',
@@ -128,6 +115,8 @@ a = Analysis(
         'llama_cpp',          # LLM removed
         'llama_cpp_python',
         'av',                 # Blocked by av stub (FFmpeg conflict)
+        'faster_whisper',     # Whisper model not bundled — Vosk is default
+        'ctranslate2',
         'huggingface_hub',
         'tokenizers',
         'tflite_runtime',
