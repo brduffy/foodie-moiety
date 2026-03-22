@@ -929,7 +929,7 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Intro Video", "",
-            "Videos (*.mp4)",
+            "Videos (*.mp4 *.m4v *.mov *.mkv *.avi)",
         )
         if not file_path:
             return
@@ -942,7 +942,8 @@ class MainWindow(QMainWindow):
             str(DATA_DIR), "media", "books", str(folder_id),
         )
         os.makedirs(dest_dir, exist_ok=True)
-        new_name = f"{uuid.uuid4().hex}.mp4"
+        ext = os.path.splitext(file_path)[1].lower() or ".mp4"
+        new_name = f"{uuid.uuid4().hex}{ext}"
         dest_path = os.path.join(dest_dir, new_name)
         rel_path = f"media/books/{folder_id}/{new_name}"
 
@@ -6162,9 +6163,16 @@ class MainWindow(QMainWindow):
         # Refresh the displayed image
         self.recipe_detail.load_step_image(rel_path)
 
-    # Only MP4/H.264 is accepted for video import
+    # Supported video containers — H.264, HEVC, and VP9 all have
+    # hardware decode on M1+ Macs and modern Windows GPUs.
+    # AV1 is excluded: PySide6's bundled FFmpeg lacks a software AV1
+    # decoder (no dav1d/libaom), so playback fails on pre-M3 Macs.
     _EXT_TO_FORMAT = {
         ".mp4": QMediaFormat.FileFormat.MPEG4,
+        ".m4v": QMediaFormat.FileFormat.MPEG4,
+        ".mov": QMediaFormat.FileFormat.QuickTime,
+        ".mkv": QMediaFormat.FileFormat.Matroska,
+        ".avi": QMediaFormat.FileFormat.AVI,
     }
 
     def _is_video_format_supported(self, file_path: str) -> bool:
@@ -6230,7 +6238,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Step Video",
             "",
-            "Videos (*.mp4)",
+            "Videos (*.mp4 *.m4v *.mov *.mkv *.avi)",
         )
         if not file_path:
             return
@@ -6247,7 +6255,8 @@ class MainWindow(QMainWindow):
             str(DATA_DIR), "media", "recipes", str(folder_id)
         )
         os.makedirs(dest_dir, exist_ok=True)
-        new_name = f"{uuid.uuid4().hex}.mp4"
+        ext = os.path.splitext(file_path)[1].lower() or ".mp4"
+        new_name = f"{uuid.uuid4().hex}{ext}"
         dest_path = os.path.join(dest_dir, new_name)
         rel_path = f"media/recipes/{folder_id}/{new_name}"
 
